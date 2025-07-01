@@ -1,0 +1,5 @@
+{
+  "import": [
+    "Kaida-Amethyst/TinyMoonbitLLVM/lexer"
+  ]
+}

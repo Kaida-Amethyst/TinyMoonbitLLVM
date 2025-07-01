@@ -1,0 +1,1024 @@
+///|
+typealias @lexer.Token
+
+///|
+fnalias @lexer.lex
+
+///|
+pub enum Type {
+  Unit
+  Bool
+  Int
+  Int64
+  UInt
+  UInt64
+  Float
+  Double
+  Ptr(Type)
+  Array(Type)
+  Struct(String)
+} derive(Show, Eq)
+
+///|
+pub fn Type::parse(master : String, sub~ : String? = None) -> Type {
+  match (master, sub) {
+    ("Unit", None) => Unit
+    ("Bool", None) => Bool
+    ("Int", None) => Int
+    ("Int64", None) => Int64
+    ("UInt", None) => UInt
+    ("UInt64", None) => UInt64
+    ("Float", None) => Float
+    ("Double", None) => Double
+    ("Ptr", Some(sub)) => Ptr(Type::parse(sub))
+    ("Array", Some(sub)) => Array(Type::parse(sub))
+    (struct_name, None) => Struct(struct_name)
+    _ => {
+      println("Unknown type name: \{master} with sub-type: \{sub}")
+      panic()
+    }
+  }
+}
+
+///|
+pub(all) enum AtomExpr {
+  Bool(Bool)
+  Int(Int)
+  Int64(Int64)
+  UInt(UInt)
+  UInt64(UInt64)
+  Float(Float)
+  Double(Double)
+  Var(String, mut ty~ : Type?) // e.g. x
+  Ref(String, mut ty~ : Type?) // e.g. ref x
+  TypeSizeof(Type) // e.g. sizeof(Int)
+  ExprSizeof(Expr) // e.g. sizeof(1 + 2)
+  Array(Array[Expr], mut ty~ : Type?) // e.g. [1, 2, 3]
+  Paren(Expr, mut ty~ : Type?) // e.g. (1 + 2)
+  Call(String, Array[Expr], mut ty~ : Type?) // e.g. func(arg1, arg2)
+} derive(Show, Eq)
+
+///|
+pub fn AtomExpr::parse(
+  tokens : ArrayView[Token]
+) -> (AtomExpr, ArrayView[Token]) {
+  match tokens {
+    [Bool(b), .. rest_toks] => (AtomExpr::Bool(b), rest_toks)
+    [Int(i), .. rest_toks] => (Int(i), rest_toks)
+    [Int64(i64), .. rest_toks] => (Int64(i64), rest_toks)
+    [UInt(u), .. rest_toks] => (UInt(u), rest_toks)
+    [UInt64(u64), .. rest_toks] => (UInt64(u64), rest_toks)
+    [Float(f), .. rest_toks] => (Float(f), rest_toks)
+    [Double(d), .. rest_toks] => (Double(d), rest_toks)
+    [Keyword(Ref), Lower(var_name), .. rest_toks] =>
+      (Ref(var_name, ty=None), rest_toks)
+    [
+      Keyword(SizeOf),
+      Bracket('('),
+      Upper(type_name),
+      Bracket(')'),
+      .. rest_toks,
+    ] => (TypeSizeof(Type::parse(type_name)), rest_toks)
+    [Keyword(SizeOf), Bracket('('), .. rest_toks] => {
+      let (expr, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Bracket(')'), .. rest_toks] else {
+        println("Parse AtomExpr Error: Expected ')' after sizeof expression")
+        panic()
+      }
+      (ExprSizeof(expr), rest_toks)
+    }
+    [Lower(func_name), Bracket('('), .. rest_toks] => {
+      let args : Array[Expr] = Array::new()
+      let rest_toks = loop rest_toks {
+        [Bracket(')'), .. rest_toks] => break rest_toks
+        _ as rest_toks => {
+          let (arg_expr, rest_toks) = Expr::parse(rest_toks)
+          args.push(arg_expr)
+          match rest_toks {
+            [Symbol(","), .. rest_toks] => continue rest_toks // continue if there is a comma
+            [Bracket(')'), .. rest_toks] => break rest_toks // break if we reach the end of the arguments
+            _ => {
+              println(
+                "Parse AtomExpr Error: Unexpected token in function call: \{rest_toks}",
+              )
+              panic()
+            }
+          }
+        }
+      }
+      (Call(func_name, args, ty=None), rest_toks)
+    }
+    [Lower(var_name), .. rest_toks] => (Var(var_name, ty=None), rest_toks)
+    [Bracket('['), Bracket(']'), ..] => {
+      println("Parse AtomExpr Error: Empty array literal is not allowed")
+      panic()
+    }
+    [Bracket('['), .. rest_toks] => {
+      let elements : Array[Expr] = Array::new()
+      let rest_toks = loop rest_toks {
+        [Bracket(']'), .. rest_toks] => break rest_toks
+        _ as rest_toks => {
+          let (expr, rest_toks) = Expr::parse(rest_toks)
+          elements.push(expr)
+          match rest_toks {
+            [Symbol(","), .. rest_toks] => continue rest_toks // continue if there is a comma
+            [Bracket(']'), .. rest_toks] => break rest_toks // break if we reach the end of the array
+            _ => {
+              println(
+                "Parse AtomExpr Error: Unexpected token in array literal: \{rest_toks}",
+              )
+              panic()
+            }
+          }
+        }
+      }
+      (Array(elements, ty=None), rest_toks)
+    }
+    [Bracket('('), .. rest_toks] => {
+      let (expr, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Bracket(')'), .. rest_toks] else {
+        println("Parse AtomExpr Error: Expected ')' after parenthesis")
+        panic()
+      }
+      (Paren(expr, ty=None), rest_toks)
+    }
+    _ => {
+      println(
+        "Parse AtomExpr Error: Unexpected token in atomic expression: \{tokens}",
+      )
+      panic()
+    }
+  }
+}
+
+///|
+test "AtomExpr::parse" {
+  let (a, _) = AtomExpr::parse(lex("true"))
+  inspect(a, content="Bool(true)")
+  let (a, _) = AtomExpr::parse(lex("123"))
+  inspect(a, content="Int(123)")
+  let (a, _) = AtomExpr::parse(lex("123L"))
+  inspect(a, content="Int64(123)")
+  let (a, _) = AtomExpr::parse(lex("123.0"))
+  inspect(a, content="Double(123)")
+  let (a, _) = AtomExpr::parse(lex("123.0f"))
+  inspect(a, content="Float(123)")
+  let (a, _) = AtomExpr::parse(lex("sizeof(Int)"))
+  inspect(a, content="TypeSizeof(Int)")
+  let (a, _) = AtomExpr::parse(lex("sizeof(1)"))
+  inspect(a, content="ExprSizeof(Apply(Atom(Int(1), ty=None), ty=None))")
+  let (a, _) = AtomExpr::parse(lex("ref x"))
+  inspect(a, content="Ref(\"x\", ty=None)")
+  let (a, _) = AtomExpr::parse(lex("x"))
+  inspect(a, content="Var(\"x\", ty=None)")
+  let (a, _) = AtomExpr::parse(lex("[1, 2]"))
+  inspect(
+    a,
+    content="Array([Apply(Atom(Int(1), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None)], ty=None)",
+  )
+}
+
+///|
+pub(all) enum ApplyExpr {
+  Atom(AtomExpr, mut ty~ : Type?) // e.g. 1, x, ref x, sizeof(Int), [1, 2, 3], (1 + 2), ref x
+  ArrayGet(ApplyExpr, Expr, mut ty~ : Type?) // e.g. arr[i]
+  StructAccess(ApplyExpr, String, mut ty~ : Type?) // e.g. struct.field
+  Cast(ApplyExpr, Type) // e.g. 1 as Float
+} derive(Show, Eq)
+
+///|
+pub fn ApplyExpr::parse(
+  tokens : ArrayView[Token]
+) -> (ApplyExpr, ArrayView[Token]) {
+  let (atom_expr, rest_toks) = AtomExpr::parse(tokens)
+  let mut apply_expr = ApplyExpr::Atom(atom_expr, ty=None)
+  loop rest_toks {
+    [Bracket('['), .. rest_toks] => {
+      let (index_expr, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Bracket(']'), .. rest_toks] else {
+        println("Parse ApplyExpr Error: Expected ']' after array index")
+        panic()
+      }
+      apply_expr = ApplyExpr::ArrayGet(apply_expr, index_expr, ty=None)
+      continue rest_toks
+    }
+    [Symbol("."), Lower(field_name), .. rest_toks] => {
+      apply_expr = ApplyExpr::StructAccess(apply_expr, field_name, ty=None)
+      continue rest_toks
+    }
+    [Keyword(As), Upper(type_name), .. rest_toks] => {
+      let type_name = Type::parse(type_name)
+      apply_expr = ApplyExpr::Cast(apply_expr, type_name)
+      continue rest_toks
+    }
+    _ as tokens => return (apply_expr, tokens) // no more applies or accesses
+  }
+}
+
+///|
+test "ApplyExpr::parse" {
+  let (a, _) = ApplyExpr::parse(lex("true"))
+  inspect(a, content="Atom(Bool(true), ty=None)")
+  let (a, _) = ApplyExpr::parse(lex("arr[1]"))
+  inspect(
+    a,
+    content="ArrayGet(Atom(Var(\"arr\", ty=None), ty=None), Apply(Atom(Int(1), ty=None), ty=None), ty=None)",
+  )
+  let (a, _) = ApplyExpr::parse(lex("p.x"))
+  inspect(
+    a,
+    content="StructAccess(Atom(Var(\"p\", ty=None), ty=None), \"x\", ty=None)",
+  )
+  let (a, _) = ApplyExpr::parse(lex("1 as Double"))
+  inspect(a, content="Cast(Atom(Int(1), ty=None), Double)")
+}
+
+///|
+pub(all) enum Expr {
+  Apply(ApplyExpr, mut ty~ : Type?) // e.g. func(arg1, arg2)
+  Neg(Expr, mut ty~ : Type?) // e.g. -1, -x
+  Add(Expr, Expr, mut ty~ : Type?) // e.g. 1 + 2
+  Sub(Expr, Expr, mut ty~ : Type?) // e.g. 1 - 2
+  Mul(Expr, Expr, mut ty~ : Type?) // e.g. 1 * 2
+  Div(Expr, Expr, mut ty~ : Type?) // e.g. 1 / 2
+  Rem(Expr, Expr, mut ty~ : Type?) // e.g. 1 % 2
+  Eq(Expr, Expr) // e.g. 1 == 2, ty must be Bool
+  Ne(Expr, Expr)
+  Le(Expr, Expr)
+  Ge(Expr, Expr)
+  Lt(Expr, Expr)
+  Gt(Expr, Expr)
+  And(Expr, Expr)
+  Or(Expr, Expr)
+  Shl(Expr, Expr, mut ty~ : Type?) // e.g. 1 << 2
+  Shr(Expr, Expr, mut ty~ : Type?) // e.g. 1 >> 2
+} derive(Show, Eq)
+
+///|
+pub fn Expr::parse(tokens : ArrayView[Token]) -> (Expr, ArrayView[Token]) {
+  if tokens is [Operator("-"), .. rest_tokens] {
+    let (expr, rest_tokens) = Expr::parse(rest_tokens)
+    return (Expr::Neg(expr, ty=None), rest_tokens)
+  }
+  fn construct_bin_expr(left : Expr, right : Expr, oper : String) -> Expr {
+    match oper {
+      "+" => Expr::Add(left, right, ty=None)
+      "-" => Expr::Sub(left, right, ty=None)
+      "*" => Expr::Mul(left, right, ty=None)
+      "/" => Expr::Div(left, right, ty=None)
+      "%" => Expr::Rem(left, right, ty=None)
+      "==" => Expr::Eq(left, right)
+      "!=" => Expr::Ne(left, right)
+      "<=" => Expr::Le(left, right)
+      ">=" => Expr::Ge(left, right)
+      "<" => Expr::Lt(left, right)
+      ">" => Expr::Gt(left, right)
+      "&&" => Expr::And(left, right)
+      "||" => Expr::Or(left, right)
+      "<<" => Expr::Shl(left, right, ty=None) // left shift
+      ">>" => Expr::Shr(left, right, ty=None) // logical right shift
+      _ => {
+        println("Unknown operator: \{oper}")
+        panic()
+      }
+    }
+  }
+
+  fn preced(op : String) -> Int {
+    match op {
+      "*" | "/" | "%" => 9
+      "+" | "-" => 8
+      "<<" | ">>" => 7 // left and logical right shift
+      "==" | "!=" | "<=" | ">=" | "<" | ">" => 6
+      "&&" => 3
+      "||" => 2
+      _ => {
+        println("Unknown operator precedence for: \{op}")
+        panic()
+      }
+    }
+  }
+
+  let exprs : Array[Expr] = Array::new()
+  let opers : Array[String] = Array::new()
+  let (head_apply, rest_toks) = ApplyExpr::parse(tokens)
+  exprs.push(Expr::Apply(head_apply, ty=None))
+  loop rest_toks {
+    [Operator(op), .. rest_toks] if opers.is_empty() => {
+      let (next_apply, rest_toks) = ApplyExpr::parse(rest_toks)
+      exprs.push(Expr::Apply(next_apply, ty=None))
+      opers.push(op)
+      continue rest_toks
+    }
+    [Operator(op), .. rest_toks] if preced(op) >= preced(opers.last().unwrap()) => {
+      let (next_apply, rest_toks) = ApplyExpr::parse(rest_toks)
+      exprs.push(Expr::Apply(next_apply, ty=None))
+      opers.push(op)
+      continue rest_toks
+    }
+    [Operator(op), .. rest_toks] => {
+      let new_exprs = Array::new()
+      let new_opers = Array::new()
+      while opers.last() is Some(last_op) && preced(op) < preced(last_op) {
+        new_exprs.push(exprs.pop().unwrap()) // right_expr
+        new_opers.push(opers.pop().unwrap())
+      } else {
+        new_exprs.push(exprs.pop().unwrap()) // left_expr
+      }
+      while not(new_opers.is_empty()) {
+        let left_expr = new_exprs.pop().unwrap()
+        let right_expr = new_exprs.pop().unwrap()
+        let oper = new_opers.pop().unwrap()
+        let new_expr = construct_bin_expr(left_expr, right_expr, oper)
+        new_exprs.push(new_expr)
+      }
+      guard new_exprs.length() == 1 else {
+        println("Parse Expression Error: Mismatched expression and operators")
+        panic()
+      }
+      exprs.push(new_exprs.pop().unwrap())
+      let (next_apply, rest_toks) = ApplyExpr::parse(rest_toks)
+      exprs.push(Expr::Apply(next_apply, ty=None))
+      opers.push(op)
+      continue rest_toks
+    }
+    _ as rest_toks => {
+      // clear opers and exprs
+      while not(opers.is_empty()) {
+        let right_expr = exprs.pop().unwrap()
+        let left_expr = exprs.pop().unwrap()
+        let oper = opers.pop().unwrap()
+        let new_expr = construct_bin_expr(left_expr, right_expr, oper)
+        exprs.push(new_expr)
+      }
+      guard exprs.length() == 1 else {
+        println("Parse Expression Error: Mismatched expression and operators")
+        panic()
+      }
+      (exprs[0], rest_toks)
+    }
+  }
+}
+
+///|
+test "Expr::parse" {
+  let (e, _) = Expr::parse(lex("1 + 2"))
+  inspect(
+    e,
+    content="Add(Apply(Atom(Int(1), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None), ty=None)",
+  )
+  let (e, _) = Expr::parse(lex("x + y * z"))
+  inspect(
+    e,
+    content="Add(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Mul(Apply(Atom(Var(\"y\", ty=None), ty=None), ty=None), Apply(Atom(Var(\"z\", ty=None), ty=None), ty=None), ty=None), ty=None)",
+  )
+  let (e, _) = Expr::parse(lex("x * y + z"))
+  inspect(
+    e,
+    content="Add(Mul(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Var(\"y\", ty=None), ty=None), ty=None), ty=None), Apply(Atom(Var(\"z\", ty=None), ty=None), ty=None), ty=None)",
+  )
+}
+
+///|
+pub(all) enum LeftValue {
+  Var(String, mut ty~ : Type?) // e.g. x
+  ArrayGet(LeftValue, Expr, mut ty~ : Type?) // e.g. arr[i]
+  StructAccess(LeftValue, String, mut ty~ : Type?) // e.g. struct.field
+} derive(Show, Eq)
+
+///|
+pub fn LeftValue::parse(
+  tokens : ArrayView[Token]
+) -> (LeftValue, ArrayView[Token]) {
+  guard tokens is [Lower(var_name), .. rest_toks] else {
+    println("Parse LeftValue Error: Not a valid left value")
+    panic()
+  }
+  let mut left_value = LeftValue::Var(var_name, ty=None)
+  loop rest_toks {
+    [Bracket('['), .. rest_toks] => {
+      let (index_expr, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Bracket(']'), .. rest_toks] else {
+        println("Parse LeftValue Error: Expected ']' after array index")
+        panic()
+      }
+      left_value = LeftValue::ArrayGet(left_value, index_expr, ty=None)
+      continue rest_toks
+    }
+    [Symbol("."), Lower(field_name), .. rest_toks] => {
+      left_value = LeftValue::StructAccess(left_value, field_name, ty=None)
+      continue rest_toks
+    }
+    _ as tokens => break (left_value, tokens)
+  }
+}
+
+///|
+test "LeftValue::parse" {
+  let (lv, _) = LeftValue::parse(lex("x"))
+  inspect(lv, content="Var(\"x\", ty=None)")
+  let (lv, _) = LeftValue::parse(lex("arr[1]"))
+  inspect(
+    lv,
+    content="ArrayGet(Var(\"arr\", ty=None), Apply(Atom(Int(1), ty=None), ty=None), ty=None)",
+  )
+  let (lv, _) = LeftValue::parse(lex("p.x"))
+  inspect(lv, content="StructAccess(Var(\"p\", ty=None), \"x\", ty=None)")
+  let (lv, _) = LeftValue::parse(lex("arr[i].x"))
+  inspect(
+    lv,
+    content="StructAccess(ArrayGet(Var(\"arr\", ty=None), Apply(Atom(Var(\"i\", ty=None), ty=None), ty=None), ty=None), \"x\", ty=None)",
+  )
+}
+
+///|
+pub(all) enum Stmt {
+  Let(String, Type, Expr?) // e.g. let x: Int = 1 or let x: Int
+  Assign(LeftValue, Expr) // e.g. x = 1 or arr[i] = 2 or arr[i].field = 3
+  If(Expr, Array[Stmt], Array[Stmt]) // e.g. if (x > 0) { ... } else { ... }
+  While(Expr, Array[Stmt]) // e.g. while (x < 10) { ... }
+  Return(Expr?) // e.g. return 1 or return
+} derive(Show, Eq)
+
+///|
+pub fn Stmt::parse(tokens : ArrayView[Token]) -> (Stmt, ArrayView[Token]) {
+  match tokens {
+    [Keyword(Let), ..] => Stmt::parse_let(tokens)
+    [Keyword(If), ..] => Stmt::parse_if(tokens)
+    [Keyword(While), ..] => Stmt::parse_while(tokens)
+    [Keyword(Return), ..] => Stmt::parse_return(tokens)
+    [Lower(_), ..] => Stmt::parse_assign(tokens)
+    _ => {
+      println("Parse Statement Error: Unexpected token in statement: \{tokens}")
+      panic()
+    }
+  }
+}
+
+///|
+pub fn Stmt::parse_let(tokens : ArrayView[Token]) -> (Stmt, ArrayView[Token]) {
+  match tokens {
+    // let x: Array[Int];
+    [
+      Keyword(Let),
+      Lower(var_name),
+      Symbol(":"),
+      Upper(type_name),
+      Bracket('['),
+      Upper(sub),
+      Bracket(']'),
+      Terminator,
+      .. rest_toks,
+    ] => {
+      let type_name = Type::parse(type_name, sub=Some(sub))
+      let stmt = Stmt::Let(var_name, type_name, None)
+      (stmt, rest_toks)
+    }
+    // let x: Array[Int] = [1, 2]
+    [
+      Keyword(Let),
+      Lower(var_name),
+      Symbol(":"),
+      Upper(type_name),
+      Bracket('['),
+      Upper(sub),
+      Bracket(']'),
+      Operator("="),
+      .. rest_toks,
+    ] => {
+      let type_name = Type::parse(type_name, sub=Some(sub))
+      let (expr, rest_toks) = Expr::parse(rest_toks)
+      let stmt = Stmt::Let(var_name, type_name, Some(expr))
+      (stmt, rest_toks)
+    }
+    // let x: Int;
+    [
+      Keyword(Let),
+      Lower(var_name),
+      Symbol(":"),
+      Upper(type_name),
+      Terminator,
+      .. rest_toks,
+    ] => {
+      let type_name = Type::parse(type_name)
+      let stmt = Stmt::Let(var_name, type_name, None)
+      (stmt, rest_toks)
+    }
+    // let x: Int = 1 + 2
+    [
+      Keyword(Let),
+      Lower(var_name),
+      Symbol(":"),
+      Upper(type_name),
+      Operator("="),
+      .. rest_toks,
+    ] => {
+      let type_name = Type::parse(type_name)
+      let (expr, rest_toks) = Expr::parse(rest_toks)
+      let stmt = Stmt::Let(var_name, type_name, Some(expr))
+      (stmt, rest_toks)
+    }
+    _ => {
+      println(
+        "Parse Let Statement Error: Unexpected token in let statement: \{tokens}",
+      )
+      panic()
+    }
+  }
+}
+
+///|
+test "Stmt::parse_let" {
+  let (s, _) = Stmt::parse(lex("let x: Int = 1 + 2;"))
+  inspect(
+    s,
+    content="Let(\"x\", Int, Some(Add(Apply(Atom(Int(1), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None), ty=None)))",
+  )
+  let (s, _) = Stmt::parse(lex("let arr: Array[Int] = [1, 2];"))
+  inspect(
+    s,
+    content="Let(\"arr\", Array(Int), Some(Apply(Atom(Array([Apply(Atom(Int(1), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None)], ty=None), ty=None), ty=None)))",
+  )
+  let (s, _) = Stmt::parse(lex("let x: Int;"))
+  inspect(s, content="Let(\"x\", Int, None)")
+  let (s, _) = Stmt::parse(lex("let xptr: Ptr[Int] = ref x;"))
+  inspect(
+    s,
+    content="Let(\"xptr\", Ptr(Int), Some(Apply(Atom(Ref(\"x\", ty=None), ty=None), ty=None)))",
+  )
+}
+
+///|
+pub fn Stmt::parse_assign(
+  tokens : ArrayView[Token]
+) -> (Stmt, ArrayView[Token]) {
+  let (left_value, rest_toks) = LeftValue::parse(tokens)
+  guard rest_toks is [Operator("="), .. rest_toks] else {
+    println("Parse Assign Statement Error: Expected '=' after left value")
+    panic()
+  }
+  let (expr, rest_toks) = Expr::parse(rest_toks)
+  let stmt = Stmt::Assign(left_value, expr)
+  guard rest_toks is [Terminator, .. rest_toks] else {
+    println(
+      "Parse Assign Statement Error: Expected ';' after assignment expression",
+    )
+    panic()
+  }
+  (stmt, rest_toks)
+}
+
+///|
+test "Stmt::parse_assign" {
+  let (s, _) = Stmt::parse(lex("x = 1 + 2;"))
+  inspect(
+    s,
+    content="Assign(Var(\"x\", ty=None), Add(Apply(Atom(Int(1), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None), ty=None))",
+  )
+  let (s, _) = Stmt::parse(lex("arr[1] = 2;"))
+  inspect(
+    s,
+    content="Assign(ArrayGet(Var(\"arr\", ty=None), Apply(Atom(Int(1), ty=None), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None))",
+  )
+  let (s, _) = Stmt::parse(lex("p.x = 3;"))
+  inspect(
+    s,
+    content="Assign(StructAccess(Var(\"p\", ty=None), \"x\", ty=None), Apply(Atom(Int(3), ty=None), ty=None))",
+  )
+  let (s, _) = Stmt::parse(lex("arr[i].x = 4;"))
+  inspect(
+    s,
+    content="Assign(StructAccess(ArrayGet(Var(\"arr\", ty=None), Apply(Atom(Var(\"i\", ty=None), ty=None), ty=None), ty=None), \"x\", ty=None), Apply(Atom(Int(4), ty=None), ty=None))",
+  )
+}
+
+///|
+pub fn Stmt::parse_if(tokens : ArrayView[Token]) -> (Stmt, ArrayView[Token]) {
+  match tokens {
+    [Keyword(If), .. rest_toks] => {
+      let (condition, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Bracket('{'), .. rest_toks] else {
+        println("Parse If Statement Error: Expected '}' after condition")
+        panic()
+      }
+      let then_body : Array[Stmt] = Array::new()
+      let rest_toks = loop rest_toks {
+        [Bracket('}'), .. rest_toks] => break rest_toks
+        _ as rest_toks => {
+          let (stmt, rest_toks) = Stmt::parse(rest_toks)
+          then_body.push(stmt)
+          continue rest_toks
+        }
+      }
+      let else_body : Array[Stmt] = Array::new()
+      let rest_toks = match rest_toks {
+        [Keyword(Else), Bracket('{'), .. rest_toks] =>
+          loop rest_toks {
+            [Bracket('}'), .. rest_toks] => break rest_toks
+            _ as rest_toks => {
+              let (stmt, rest_toks) = Stmt::parse(rest_toks)
+              else_body.push(stmt)
+              continue rest_toks
+            }
+          }
+        [Keyword(Else), .. rest_toks] if rest_toks is [Keyword(If), ..] => {
+          let (else_if_stmt, rest_toks) = Stmt::parse_if(rest_toks)
+          else_body.push(else_if_stmt)
+          rest_toks
+        }
+        _ => rest_toks
+      }
+      let stmt = Stmt::If(condition, then_body, else_body)
+      (stmt, rest_toks)
+    }
+    _ => {
+      println(
+        "Parse If Statement Error: Unexpected token in if statement: \{tokens}",
+      )
+      panic()
+    }
+  }
+}
+
+///|
+test "Stmt::parse if" {
+  let (s, _) = #| if x > 0 {
+    #|   b = true;
+    #| }
+    |> lex
+    |> Stmt::parse_if
+  inspect(
+    s,
+    content="If(Gt(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Int(0), ty=None), ty=None)), " +
+      "[Assign(Var(\"b\", ty=None), Apply(Atom(Bool(true), ty=None), ty=None))], [])",
+  )
+  let (s, _) = #| if x > 0 {
+    #|   b = true;
+    #| } else {
+    #|   b = false;
+    #| }
+    |> lex
+    |> Stmt::parse_if
+  inspect(
+    s,
+    content="If(Gt(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Int(0), ty=None), ty=None)), " +
+      "[Assign(Var(\"b\", ty=None), Apply(Atom(Bool(true), ty=None), ty=None))], " +
+      "[Assign(Var(\"b\", ty=None), Apply(Atom(Bool(false), ty=None), ty=None))])",
+  )
+  let (s, _) = #| if x > 0 {
+    #|   b = 1;
+    #| } else if x < 0 {
+    #|   b = -1;
+    #| } else {
+    #|   b = 0;
+    #| }
+    |> lex
+    |> Stmt::parse_if
+  inspect(
+    s,
+    content="If(Gt(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Int(0), ty=None), ty=None)), " +
+      "[Assign(Var(\"b\", ty=None), Apply(Atom(Int(1), ty=None), ty=None))], " +
+      "[If(Lt(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Int(0), ty=None), ty=None)), " +
+      "[Assign(Var(\"b\", ty=None), Neg(Apply(Atom(Int(1), ty=None), ty=None), ty=None))], " +
+      "[Assign(Var(\"b\", ty=None), Apply(Atom(Int(0), ty=None), ty=None))])])",
+  )
+}
+
+///|
+pub fn Stmt::parse_while(tokens : ArrayView[Token]) -> (Stmt, ArrayView[Token]) {
+  match tokens {
+    [Keyword(While), .. rest_toks] => {
+      let (condition, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Bracket('{'), .. rest_toks] else {
+        println("Parse While Statement Error: Expected '}' after condition")
+        panic()
+      }
+      let body : Array[Stmt] = Array::new()
+      let rest_toks = loop rest_toks {
+        [Bracket('}'), .. rest_toks] => break rest_toks
+        _ as rest_toks => {
+          let (stmt, rest_toks) = Stmt::parse(rest_toks)
+          body.push(stmt)
+          continue rest_toks
+        }
+      }
+      let stmt = Stmt::While(condition, body)
+      (stmt, rest_toks)
+    }
+    _ => {
+      println(
+        "Parse While Statement Error: Unexpected token in while statement: \{tokens}",
+      )
+      panic()
+    }
+  }
+}
+
+///|
+test "Stmt::parse while" {
+  let (s, _) = #| while x < 10 {
+    #|   x = x + 1;
+    #| }
+    |> lex
+    |> Stmt::parse_while
+  inspect(
+    s,
+    content="While(Lt(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Int(10), ty=None), ty=None)), " +
+      "[Assign(Var(\"x\", ty=None), Add(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Int(1), ty=None), ty=None), ty=None))])",
+  )
+}
+
+///|
+pub fn Stmt::parse_return(
+  tokens : ArrayView[Token]
+) -> (Stmt, ArrayView[Token]) {
+  match tokens {
+    [Keyword(Return), Terminator, .. rest_toks] =>
+      (Stmt::Return(None), rest_toks)
+    [Keyword(Return), .. rest_toks] => {
+      let (expr, rest_toks) = Expr::parse(rest_toks)
+      guard rest_toks is [Terminator, .. rest_toks] else {
+        println(
+          "Parse Return Statement Error: Expected ';' after return expression",
+        )
+        panic()
+      }
+      (Stmt::Return(Some(expr)), rest_toks)
+    }
+    _ => {
+      println(
+        "Parse Return Statement Error: Unexpected token in return statement: \{tokens}",
+      )
+      panic()
+    }
+  }
+}
+
+///|
+test "Stmt::parse return" {
+  let (s, _) = Stmt::parse(lex("return;"))
+  inspect(s, content="Return(None)")
+  let (s, _) = Stmt::parse(lex("return 1 + 2;"))
+  inspect(
+    s,
+    content="Return(Some(Add(Apply(Atom(Int(1), ty=None), ty=None), Apply(Atom(Int(2), ty=None), ty=None), ty=None)))",
+  )
+}
+
+///|
+pub(all) struct Function {
+  name : String
+  params : Array[(String, Type)]
+  ret_ty : Type
+  body : Array[Stmt]
+} derive(Show, Eq)
+
+///|
+pub fn Function::parse(
+  tokens : ArrayView[Token]
+) -> (Function, ArrayView[Token]) {
+  guard tokens is [Keyword(Fn), Lower(fname), Bracket('('), .. tokens] else {
+    println("Parse Function Error, Not a function definition")
+    panic()
+  }
+  let params : Array[(String, Type)] = Array::new()
+  let tokens = loop tokens {
+    // Ptr or Array
+    [
+      Lower(param_name),
+      Symbol(":"),
+      Upper(master),
+      Bracket('['),
+      Upper(sub),
+      Bracket(']'),
+      .. rest_toks,
+    ] => {
+      let type_name = Type::parse(master, sub=Some(sub))
+      params.push((param_name, type_name))
+      continue rest_toks
+    }
+    [Lower(param_name), Symbol(":"), Upper(type_name), .. rest_toks] => {
+      let type_name = Type::parse(type_name)
+      params.push((param_name, type_name))
+      continue rest_toks
+    }
+    [Symbol(","), .. rest_toks] => continue rest_toks
+    // `) ->`, break 
+    [Bracket(')'), LeftArrow, .. rest_toks] => break rest_toks
+    _ as tokens => {
+      println("Parse Function Error: Unexpected token in parameters: \{tokens}")
+      panic()
+    }
+  }
+
+  // parse return type
+  let (ret_ty, tokens) = match tokens {
+    [
+      Upper(master),
+      Bracket('['),
+      Upper(sub),
+      Bracket(']'),
+      Bracket('{'),
+      .. rest_toks,
+    ] => {
+      let return_type = Type::parse(master, sub=Some(sub))
+      (return_type, rest_toks)
+    }
+    [Upper(ret_ty), Bracket('{'), .. rest_toks] => {
+      let return_type = Type::parse(ret_ty)
+      (return_type, rest_toks)
+    }
+    _ => {
+      println("Parse Function Error, during parsing return type")
+      panic()
+    }
+  }
+  let body : Array[Stmt] = Array::new()
+  let tokens = loop tokens {
+    [Bracket('}'), .. rest_toks] => break rest_toks
+    _ as tokens => {
+      let (stmt, rest_toks) = Stmt::parse(tokens)
+      body.push(stmt)
+      continue rest_toks
+    }
+  }
+  let function = Function::{ name: fname, params, ret_ty, body }
+  (function, tokens)
+}
+
+///|
+pub struct MainFunc {
+  body : Array[Stmt]
+} derive(Show)
+
+///|
+pub fn MainFunc::parse(
+  tokens : ArrayView[Token]
+) -> (MainFunc, ArrayView[Token]) {
+  guard tokens is [Keyword(Fn), Lower("main"), Bracket('{'), .. tokens] else {
+    println("Parse Main Function Error, Not a main function definition")
+    panic()
+  }
+  let body : Array[Stmt] = Array::new()
+  let tokens = loop tokens {
+    [Bracket('}'), .. rest_toks] => break rest_toks
+    _ as tokens => {
+      let (stmt, rest_toks) = Stmt::parse(tokens)
+      body.push(stmt)
+      continue rest_toks
+    }
+  }
+  let main_func = MainFunc::{ body, }
+  (main_func, tokens)
+}
+
+///|
+test "Function::parse" {
+  let (f, _) = Function::parse(
+    lex("fn add(x: Int, y: Int) -> Int { return x + y; }"),
+  )
+  inspect(
+    f,
+    content="{name: \"add\", " +
+      "params: [(\"x\", Int), (\"y\", Int)], " +
+      "ret_ty: Int, " +
+      "body: [Return(Some(Add(Apply(Atom(Var(\"x\", ty=None), ty=None), ty=None), Apply(Atom(Var(\"y\", ty=None), ty=None), ty=None), ty=None)))]}",
+  )
+  let (f, _) = Function::parse(
+    lex("fn get_size(arr: ValIntArray) -> Int { return arr.size; }"),
+  )
+  inspect(
+    f,
+    content="{name: \"get_size\", " +
+      "params: [(\"arr\", Struct(\"ValIntArray\"))], " +
+      "ret_ty: Int, " +
+      "body: [Return(Some(Apply(StructAccess(Atom(Var(\"arr\", ty=None), ty=None), \"size\", ty=None), ty=None)))]}",
+  )
+}
+
+///|
+pub(all) struct StructDef {
+  name : String
+  fields : Array[(String, Type)]
+} derive(Show, Eq)
+
+///|
+pub fn StructDef::parse(
+  tokens : ArrayView[Token]
+) -> (StructDef, ArrayView[Token]) {
+  guard tokens is [Keyword(Struct), Upper(name), Bracket('{'), .. tokens] else {
+    println("Parse Struct Error, Not a struct definition")
+    panic()
+  }
+  let fields : Array[(String, Type)] = Array::new()
+  let tokens = loop tokens {
+    [
+      Lower(field_name),
+      Symbol(":"),
+      Upper(master),
+      Bracket('['),
+      Upper(sub),
+      Bracket(']'),
+      .. rest_toks,
+    ] => {
+      let type_name = Type::parse(master, sub=Some(sub))
+      fields.push((field_name, type_name))
+      continue rest_toks
+    }
+    [Lower(field_name), Symbol(":"), Upper(type_name), .. rest_toks] => {
+      let type_name = Type::parse(type_name)
+      fields.push((field_name, type_name))
+      continue rest_toks
+    }
+    [Symbol(","), .. rest_toks] => continue rest_toks
+    [Bracket('}'), .. rest_toks] => break rest_toks
+    _ as tokens => {
+      println(
+        "Parse Struct Error: Unexpected token in struct fields: \{tokens}",
+      )
+      panic()
+    }
+  }
+  let struct_def = StructDef::{ name, fields }
+  (struct_def, tokens)
+}
+
+///|
+test "StructDef::parse" {
+  let (s, _) = StructDef::parse(lex("struct Point { x: Int, y: Int };"))
+  inspect(s, content="{name: \"Point\", fields: [(\"x\", Int), (\"y\", Int)]}")
+  let (s, _) = StructDef::parse(
+    lex("struct ValArray { data: Ptr[Int], size: Int };"),
+  )
+  inspect(
+    s,
+    content="{name: \"ValArray\", fields: [(\"data\", Ptr(Int)), (\"size\", Int)]}",
+  )
+}
+
+///|
+pub fn StructDef::get_field_type(self : Self, field_name : String) -> Type? {
+  for field in self.fields {
+    let (name, ty) = field
+    if name == field_name {
+      return Some(ty)
+    }
+  }
+  None
+}
+
+///|
+pub fn StructDef::get_field_index(self : Self, field_name : String) -> Int? {
+  for i = 0; i < self.fields.length(); i = i + 1 {
+    let (name, _) = self.fields[i]
+    if name == field_name {
+      return Some(i)
+    }
+  }
+  None
+}
+
+///|
+pub struct Program {
+  functions : Map[String, Function]
+  structs : Map[String, StructDef]
+  main_func : MainFunc?
+} derive(Show)
+
+///|
+pub fn Program::parse(tokens : Array[Token]) -> Program {
+  let functions = Map::new()
+  let structs = Map::new()
+  let mut main_func = None
+  loop tokens[:] {
+    [EOF] => break
+    [Keyword(Fn), Lower("main"), ..] as toks => {
+      let (f, rest_toks) = MainFunc::parse(toks)
+      main_func = Some(f)
+      continue rest_toks
+    }
+    [Keyword(Fn), ..] as toks => {
+      let (f, rest_toks) = Function::parse(toks)
+      guard not(functions.contains(f.name)) else {
+        println("Parse Program Error: Function \{f.name} already defined")
+        panic()
+      }
+      functions.set(f.name, f)
+      continue rest_toks
+    }
+    [Keyword(Struct), ..] as toks => {
+      let (s, rest_toks) = StructDef::parse(toks)
+      guard not(structs.contains(s.name)) else {
+        println("Parse Program Error: Struct \{s.name} already defined")
+        panic()
+      }
+      structs.set(s.name, s)
+      continue rest_toks
+    }
+    _ => {
+      println("Parse Program Error: Unexpected token in program: \{tokens}")
+      panic()
+    }
+  }
+  Program::{ functions, structs, main_func }
+}
