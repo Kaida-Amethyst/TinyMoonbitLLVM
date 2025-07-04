@@ -1,0 +1,6 @@
+{
+  "import": [
+    "Kaida-Amethyst/TinyMoonbit/parser",
+    "Kaida-Amethyst/llvm/llvm"
+  ]
+}

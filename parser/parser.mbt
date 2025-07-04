@@ -434,10 +434,11 @@ test "LeftValue::parse" {
 ///|
 pub(all) enum Stmt {
   Let(String, Type, Expr?) // e.g. let x: Int = 1 or let x: Int
-  Assign(LeftValue, Expr) // e.g. x = 1 or arr[i] = 2 or arr[i].field = 3
   If(Expr, Array[Stmt], Array[Stmt]) // e.g. if (x > 0) { ... } else { ... }
   While(Expr, Array[Stmt]) // e.g. while (x < 10) { ... }
   Return(Expr?) // e.g. return 1 or return
+  Assign(LeftValue, Expr) // e.g. x = 1 or arr[i] = 2 or arr[i].field = 3
+  Expr(Expr) // single expression statement, e.g. print_int(1);
 } derive(Show, Eq)
 
 ///|
@@ -447,7 +448,13 @@ pub fn Stmt::parse(tokens : ArrayView[Token]) -> (Stmt, ArrayView[Token]) {
     [Keyword(If), ..] => Stmt::parse_if(tokens)
     [Keyword(While), ..] => Stmt::parse_while(tokens)
     [Keyword(Return), ..] => Stmt::parse_return(tokens)
-    [Lower(_), ..] => Stmt::parse_assign(tokens)
+    [Lower(_), ..] => {
+      let (_, rest_toks) = ApplyExpr::parse(tokens)
+      match rest_toks[0] {
+        Operator("=") => Stmt::parse_assign(tokens)
+        _ => Stmt::parse_expr(tokens)
+      }
+    }
     _ => {
       println("Parse Statement Error: Unexpected token in statement: \{tokens}")
       panic()
@@ -766,6 +773,16 @@ test "Stmt::parse return" {
 }
 
 ///|
+pub fn Stmt::parse_expr(tokens : ArrayView[Token]) -> (Stmt, ArrayView[Token]) {
+  let (expr, rest_toks) = Expr::parse(tokens)
+  guard rest_toks is [Terminator, .. rest_toks] else {
+    println("Parse Expression Statement Error: Expected ';' after expression")
+    panic()
+  }
+  (Stmt::Expr(expr), rest_toks)
+}
+
+///|
 pub(all) struct Function {
   name : String
   params : Array[(String, Type)]
@@ -774,13 +791,15 @@ pub(all) struct Function {
 } derive(Show, Eq)
 
 ///|
-pub fn Function::parse(
+pub fn Function::parse_extern(
   tokens : ArrayView[Token]
 ) -> (Function, ArrayView[Token]) {
-  guard tokens is [Keyword(Fn), Lower(fname), Bracket('('), .. tokens] else {
-    println("Parse Function Error, Not a function definition")
+  guard tokens
+    is [Keyword(Extern), Keyword(Fn), Lower(fname), Bracket('('), .. tokens] else {
+    println("Parse Function Error: Not a valid extern function declaration")
     panic()
   }
+  // Extern function, just skip the body
   let params : Array[(String, Type)] = Array::new()
   let tokens = loop tokens {
     // Ptr or Array
@@ -810,7 +829,6 @@ pub fn Function::parse(
       panic()
     }
   }
-
   // parse return type
   let (ret_ty, tokens) = match tokens {
     [
@@ -818,13 +836,13 @@ pub fn Function::parse(
       Bracket('['),
       Upper(sub),
       Bracket(']'),
-      Bracket('{'),
+      Terminator,
       .. rest_toks,
     ] => {
       let return_type = Type::parse(master, sub=Some(sub))
       (return_type, rest_toks)
     }
-    [Upper(ret_ty), Bracket('{'), .. rest_toks] => {
+    [Upper(ret_ty), Terminator, .. rest_toks] => {
       let return_type = Type::parse(ret_ty)
       (return_type, rest_toks)
     }
@@ -832,6 +850,77 @@ pub fn Function::parse(
       println("Parse Function Error, during parsing return type")
       panic()
     }
+  }
+  let function = Function::{ name: fname, params, ret_ty, body: Array::new() }
+  return (function, tokens)
+}
+
+///|
+pub fn Function::parse(
+  tokens : ArrayView[Token]
+) -> (Function, ArrayView[Token]) {
+  let (fname, params, ret_ty, tokens) = if tokens
+    is [Keyword(Fn), Lower(fname), Bracket('('), .. tokens] {
+    let params : Array[(String, Type)] = Array::new()
+    let tokens = loop tokens {
+      // Ptr or Array
+      [
+        Lower(param_name),
+        Symbol(":"),
+        Upper(master),
+        Bracket('['),
+        Upper(sub),
+        Bracket(']'),
+        .. rest_toks,
+      ] => {
+        let type_name = Type::parse(master, sub=Some(sub))
+        params.push((param_name, type_name))
+        continue rest_toks
+      }
+      [Lower(param_name), Symbol(":"), Upper(type_name), .. rest_toks] => {
+        let type_name = Type::parse(type_name)
+        params.push((param_name, type_name))
+        continue rest_toks
+      }
+      [Symbol(","), .. rest_toks] => continue rest_toks
+      // `) ->`, break 
+      [Bracket(')'), LeftArrow, .. rest_toks] => break rest_toks
+      _ as tokens => {
+        println(
+          "Parse Function Error: Unexpected token in parameters: \{tokens}",
+        )
+        panic()
+      }
+    }
+
+    // parse return type
+    let (ret_ty, tokens) = match tokens {
+      [
+        Upper(master),
+        Bracket('['),
+        Upper(sub),
+        Bracket(']'),
+        Bracket('{'),
+        .. rest_toks,
+      ] => {
+        let return_type = Type::parse(master, sub=Some(sub))
+        (return_type, rest_toks)
+      }
+      [Upper(ret_ty), Bracket('{'), .. rest_toks] => {
+        let return_type = Type::parse(ret_ty)
+        (return_type, rest_toks)
+      }
+      _ => {
+        println("Parse Function Error, during parsing return type")
+        panic()
+      }
+    }
+    (fname, params, ret_ty, tokens)
+  } else if tokens is [Keyword(Fn), Lower("main"), Bracket('{'), .. tokens] {
+    ("main", Array::new(), Type::Unit, tokens)
+  } else {
+    println("Parse Function Error, Not a function definition")
+    panic()
   }
   let body : Array[Stmt] = Array::new()
   let tokens = loop tokens {
@@ -844,32 +933,6 @@ pub fn Function::parse(
   }
   let function = Function::{ name: fname, params, ret_ty, body }
   (function, tokens)
-}
-
-///|
-pub struct MainFunc {
-  body : Array[Stmt]
-} derive(Show)
-
-///|
-pub fn MainFunc::parse(
-  tokens : ArrayView[Token]
-) -> (MainFunc, ArrayView[Token]) {
-  guard tokens is [Keyword(Fn), Lower("main"), Bracket('{'), .. tokens] else {
-    println("Parse Main Function Error, Not a main function definition")
-    panic()
-  }
-  let body : Array[Stmt] = Array::new()
-  let tokens = loop tokens {
-    [Bracket('}'), .. rest_toks] => break rest_toks
-    _ as tokens => {
-      let (stmt, rest_toks) = Stmt::parse(tokens)
-      body.push(stmt)
-      continue rest_toks
-    }
-  }
-  let main_func = MainFunc::{ body, }
-  (main_func, tokens)
 }
 
 ///|
@@ -981,20 +1044,28 @@ pub fn StructDef::get_field_index(self : Self, field_name : String) -> Int? {
 ///|
 pub struct Program {
   functions : Map[String, Function]
+  externs : Map[String, Function]
   structs : Map[String, StructDef]
-  main_func : MainFunc?
+  //main_func : MainFunc?
 } derive(Show)
 
 ///|
 pub fn Program::parse(tokens : Array[Token]) -> Program {
   let functions = Map::new()
+  let externs = Map::new()
   let structs = Map::new()
-  let mut main_func = None
+  //let mut main_func = None
   loop tokens[:] {
     [EOF] => break
-    [Keyword(Fn), Lower("main"), ..] as toks => {
-      let (f, rest_toks) = MainFunc::parse(toks)
-      main_func = Some(f)
+    [Keyword(Extern), ..] as toks => {
+      let (f, rest_toks) = Function::parse_extern(toks)
+      guard not(functions.contains(f.name)) else {
+        println(
+          "Parse Program Error: Extern function \{f.name} already defined",
+        )
+        panic()
+      }
+      externs.set(f.name, f)
       continue rest_toks
     }
     [Keyword(Fn), ..] as toks => {
@@ -1020,5 +1091,5 @@ pub fn Program::parse(tokens : Array[Token]) -> Program {
       panic()
     }
   }
-  Program::{ functions, structs, main_func }
+  Program::{ functions, externs, structs }
 }
