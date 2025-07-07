@@ -1062,7 +1062,6 @@ pub struct Program {
   functions : Map[String, Function]
   externs : Map[String, Function]
   structs : Map[String, StructDef]
-  //main_func : MainFunc?
 } derive(Show)
 
 ///|
@@ -1070,7 +1069,6 @@ pub fn Program::parse(tokens : Array[Token]) -> Program raise {
   let functions = Map::new()
   let externs = Map::new()
   let structs = Map::new()
-  //let mut main_func = None
   loop tokens[:] {
     [EOF] => break
     [Keyword(Extern), ..] as toks => {

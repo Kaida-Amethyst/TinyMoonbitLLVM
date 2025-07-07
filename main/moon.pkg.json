@@ -1,5 +1,15 @@
 {
   "is-main": true,
   "import": [
-  ]
+    "Kaida-Amethyst/TinyMoonbit/lexer",
+    "Kaida-Amethyst/TinyMoonbit/parser",
+    "Kaida-Amethyst/TinyMoonbit/codegen"
+  ],
+  "link" : {
+    "native" : {
+      "cc" : "$CC",
+      "cc-flags": "$CC_FLAGS -w",
+      "cc-link-flags" : "$CC_LINK_FLAGS"
+    }
+  }
 }

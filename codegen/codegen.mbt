@@ -1,4 +1,4 @@
-///|
+//
 pub suberror CodeGenError String derive(Show)
 
 ///|
@@ -140,12 +140,11 @@ pub fn CodeGen::emitProg(self : Self) -> Unit raise Error {
   self.parser_prog.structs
   .values()
   .each(struct_def => self.emitStructDef(struct_def))
-  let llvm_funcs = Map::new()
-  self.parser_prog.functions.each((name, func) => llvm_funcs.set(
+  self.parser_prog.functions.each((name, func) => self.llvm_funcs.set(
     name,
     self.genFuncVal(func),
   ))
-  self.parser_prog.externs.each((name, func) => llvm_funcs.set(
+  self.parser_prog.externs.each((name, func) => self.llvm_funcs.set(
     name,
     self.genFuncVal(func),
   ))
@@ -154,7 +153,7 @@ pub fn CodeGen::emitProg(self : Self) -> Unit raise Error {
       Some(func) => func
       None => raise CodeGenError("Error: Function not found: \{func_name}")
     }
-    let llvm_func = match llvm_funcs.get(func_name) {
+    let llvm_func = match self.llvm_funcs.get(func_name) {
       Some(func) => func
       None => raise CodeGenError("Error: LLVM function not found: \{func_name}")
     }
@@ -224,13 +223,25 @@ fn Env::emitStmt(self : Self, stmt : @parser.Stmt) -> Unit raise {
       let data_ty = self.gen.convert_parser_type_to_llvm_basic_type(ty)
       let alloca = self.gen.builder.build_alloca(data_ty)
       self.symbols.set(name, alloca)
-      let value = self.emitExpr(expr)
+      let value = match self.emitExpr(expr).try_as_basic_value() {
+        Some(value) => value
+        None =>
+          raise CodeGenError(
+            "Error: Expression \{expr} cannot be converted to a value",
+          )
+      }
       let _ = self.gen.builder.build_store(alloca, value)
 
     }
     Assign(left_val, expr) => {
       let ptr = self.emitLeftValue(left_val).into_pointer_value()
-      let value = self.emitExpr(expr)
+      let value = match self.emitExpr(expr).try_as_basic_value() {
+        Some(value) => value
+        None =>
+          raise CodeGenError(
+            "Error: Expression \{expr} cannot be converted to a value",
+          )
+      }
       let _ = self.gen.builder.build_store(ptr, value)
 
     }
@@ -252,7 +263,6 @@ fn Env::emitStmt(self : Self, stmt : @parser.Stmt) -> Unit raise {
       let then_block = self.gen.llvm_ctx.append_basic_block(self.llvm_func)
       let else_block = self.gen.llvm_ctx.append_basic_block(self.llvm_func)
       let merge_block = self.gen.llvm_ctx.append_basic_block(self.llvm_func)
-      //let _ = self.gen.builder.createCondBr(cond_val, then_block, else_block)
       let _ = self.gen.builder.build_conditional_branch(
         cond_val, then_block, else_block,
       )
@@ -287,7 +297,13 @@ fn Env::emitStmt(self : Self, stmt : @parser.Stmt) -> Unit raise {
 
     }
     Return(Some(expr)) => {
-      let value = self.emitExpr(expr)
+      let value = match self.emitExpr(expr).try_as_basic_value() {
+        Some(value) => value
+        None =>
+          raise CodeGenError(
+            "Error: Expression \{expr} cannot be converted to a value",
+          )
+      }
       let _ = self.gen.builder.build_return(value)
 
     }
@@ -296,9 +312,6 @@ fn Env::emitStmt(self : Self, stmt : @parser.Stmt) -> Unit raise {
 
     }
   }
-  //_ => {
-  //  raise CodeGenError("Error: Unsupported statement: \{stmt}");
-  //}
 }
 
 ///|
@@ -380,9 +393,11 @@ fn Env::emitLeftValue(
 }
 
 ///|
-fn Env::emitExpr(self : Self, expr : @parser.Expr) -> &@llvm.BasicValue raise {
+fn Env::emitExpr(self : Self, expr : @parser.Expr) -> &@llvm.Value raise {
   match expr {
-    Apply(apply_expr, ..) => self.emitApplyExpr(apply_expr).into_basic_value()
+    Apply(apply_expr, ..) => {
+      self.emitApplyExpr(apply_expr)
+    }
     Neg(expr, ty=Some(Int | Int64 as ty)) => {
       let value = self.emitExpr(expr).into_int_value()
       //let zero = self.gen.llvm_ctx.getConstInt32(0) as &Value;
@@ -615,7 +630,9 @@ fn Env::emitApplyExpr(
   apply_expr : @parser.ApplyExpr
 ) -> &@llvm.Value raise {
   match apply_expr {
-    Atom(atom_expr, ..) => self.emitAtomExpr(atom_expr)
+    Atom(atom_expr, ..) => {
+      self.emitAtomExpr(atom_expr)
+    }
     ArrayGet(array_val, index_expr, ty=Some(ele_ty)) => {
       let array_ptr = self.emitApplyExpr(array_val).into_pointer_value()
       let index_val = self.emitExpr(index_expr).into_int_value()
@@ -792,22 +809,25 @@ fn Env::emitAtomExpr(
         Some(value) => value.into_pointer_value()
         None => raise CodeGenError("Error: Reference not found: \{name}")
       }
-    //.or_else(() => {
-    //  raise CodeGenError("Error: Reference not found: \{name}")
-    //})
     TypeSizeof(ty) =>
       match self.gen.convert_parser_type_to_llvm_type(ty).size_of() {
         Some(size) => size
         None => raise CodeGenError("Error: get Type size compute failed: \{ty}")
       }
-    ExprSizeof(_) => raise CodeGenError("Error: ExprSizeof not implemented yet")
+    ExprSizeof(_) => raise CodeGenError("ExprSizeof not implemented yet")
     Array(exprs, ty=Some(Array(ele_ty))) => {
       let ele_ty = self.gen.convert_parser_type_to_llvm_basic_type(ele_ty)
       let array_size = exprs.length().reinterpret_as_uint()
       let arr_ty = ele_ty.array_type(array_size)
       let array_ptr = self.gen.builder.build_alloca(arr_ty)
       exprs.eachi((i, expr) => {
-        let value = self.emitExpr(expr)
+        let value = match self.emitExpr(expr).try_as_basic_value() {
+          Some(value) => value
+          None =>
+            raise CodeGenError(
+              "Expression \{expr} cannot be converted to a value",
+            )
+        }
         let index = self.gen.llvm_ctx.i32_type().const_int(i.to_uint64())
         let element_ptr = self.gen.builder.build_gep(ele_ty, array_ptr, [index])
         let _ = self.gen.builder.build_store(element_ptr, value)
@@ -822,7 +842,16 @@ fn Env::emitAtomExpr(
         None =>
           raise CodeGenError("Error: LLVM function not found: \{func_name}")
       }
-      let args_vals = args.map(arg => self.emitExpr(arg))
+      let args_vals = args.map(arg => {
+        match self.emitExpr(arg).try_as_basic_value() {
+          Some(value) => value
+          None =>
+            raise CodeGenError(
+              "Error: Expression \{arg} cannot be converted to a value",
+            )
+        }
+      })
+
       self.gen.builder.build_call(llvm_func, args_vals)
     }
     _ => raise CodeGenError("Error: Unsupported atom expression: \{atomExpr}")
