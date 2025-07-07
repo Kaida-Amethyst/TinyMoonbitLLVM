@@ -1,5 +1,7 @@
 ///|
-fnalias @lexer.lex
+fnalias @TinyMoonbit.lex
+
+typealias @TinyMoonbit.(Program, TypeCheck, CodeGen)
 
 ///|
 let code1 : String = 
@@ -64,9 +66,9 @@ let code3 : String =
     #|}
 
 fn test_code(code: String) -> Unit raise {
-  let prog = @parser.Program::parse(lex(code))
-  let _ = @parser.TypeCheck::check_prog(prog)
-  let codegen = @codegen.CodeGen::init(prog)
+  let prog = Program::parse(lex(code))
+  let _ = TypeCheck::check_prog(prog)
+  let codegen = CodeGen::init(prog)
   match (try? codegen.emitProg()) {
     Ok(_) => codegen.dump()
     Err(e) => println("Error during code generation: \{e}")

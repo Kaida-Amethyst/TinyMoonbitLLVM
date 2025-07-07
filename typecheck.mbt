@@ -2,18 +2,18 @@
 pub suberror TypeCheckError String derive(Show)
 
 ///|
-pub struct Env[K, V] {
-  parent : Env[K, V]?
+pub struct TypeEnv[K, V] {
+  parent : TypeEnv[K, V]?
   data : Map[K, V]
 }
 
 ///|
-pub fn[K, V] Env::new(parent~ : Env[K, V]? = None) -> Env[K, V] {
-  Env::{ parent, data: Map::new() }
+pub fn[K, V] TypeEnv::new(parent~ : TypeEnv[K, V]? = None) -> TypeEnv[K, V] {
+  TypeEnv::{ parent, data: Map::new() }
 }
 
 ///|
-pub fn[K : Eq + Hash, V] Env::get(self : Self[K, V], key : K) -> V? {
+pub fn[K : Eq + Hash, V] TypeEnv::get(self : Self[K, V], key : K) -> V? {
   match self.data.get(key) {
     Some(value) => Some(value)
     None =>
@@ -25,7 +25,7 @@ pub fn[K : Eq + Hash, V] Env::get(self : Self[K, V], key : K) -> V? {
 }
 
 ///|
-pub fn[K : Eq + Hash + Show, V] Env::get_or_err(
+pub fn[K : Eq + Hash + Show, V] TypeEnv::get_or_err(
   self : Self[K, V],
   key : K
 ) -> V raise {
@@ -40,7 +40,7 @@ pub fn[K : Eq + Hash + Show, V] Env::get_or_err(
 }
 
 ///|
-pub fn[K : Eq + Hash + Show, V] Env::set(
+pub fn[K : Eq + Hash + Show, V] TypeEnv::set(
   self : Self[K, V],
   key : K,
   value : V
@@ -53,7 +53,7 @@ pub fn[K : Eq + Hash + Show, V] Env::set(
 
 ///|
 pub struct TypeCheck {
-  local_env : Env[String, Type]
+  local_env : TypeEnv[String, Type]
   func : Function
   prog : Program
 }
@@ -61,7 +61,7 @@ pub struct TypeCheck {
 ///|
 pub fn TypeCheck::sub_env(self : Self) -> TypeCheck {
   TypeCheck::{
-    local_env: Env::new(parent=Some(self.local_env)),
+    local_env: TypeEnv::new(parent=Some(self.local_env)),
     func: self.func,
     prog: self.prog,
   }
@@ -71,7 +71,7 @@ pub fn TypeCheck::sub_env(self : Self) -> TypeCheck {
 pub fn TypeCheck::check_prog(prog : Program) -> Unit raise {
   for func_entry in prog.functions {
     let (_, func) = func_entry
-    TypeCheck::{ local_env: Env::new(), func, prog }.check_function(func)
+    TypeCheck::{ local_env: TypeEnv::new(), func, prog }.check_function(func)
   }
 }
 

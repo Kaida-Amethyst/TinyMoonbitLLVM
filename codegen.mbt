@@ -1,9 +1,9 @@
-//
+///|
 pub suberror CodeGenError String derive(Show)
 
 ///|
 pub struct CodeGen {
-  parser_prog : @parser.Program
+  parser_prog : Program
   llvm_ctx : @llvm.Context
   llvm_prog : @llvm.Module
   builder : @llvm.Builder
@@ -12,7 +12,7 @@ pub struct CodeGen {
 }
 
 ///|
-pub fn CodeGen::init(parser_prog : @parser.Program) -> CodeGen {
+pub fn CodeGen::init(parser_prog : Program) -> CodeGen {
   let llvm_ctx = @llvm.Context::create()
   let llvm_prog = llvm_ctx.create_module("tinymoonbit")
   let builder = llvm_ctx.create_builder()
@@ -27,17 +27,14 @@ pub fn CodeGen::dump(self : Self) -> Unit {
 }
 
 ///|
-traitalias @llvm.Type
-
-///|
 fn CodeGen::convert_parser_type_to_llvm_type(
   self : Self,
-  ty : @parser.Type
-) -> &Type raise {
+  ty : Type
+) -> &@llvm.Type raise {
   let ctx = self.llvm_ctx
   match ty {
     Unit => {
-      ctx.void_type() as &Type
+      ctx.void_type() as &@llvm.Type
     }
     Bool => ctx.bool_type()
     Int | UInt => ctx.i32_type()
@@ -57,7 +54,7 @@ fn CodeGen::convert_parser_type_to_llvm_type(
 ///|
 fn CodeGen::convert_parser_type_to_llvm_basic_type(
   self : Self,
-  ty : @parser.Type
+  ty : Type
 ) -> &@llvm.BasicType raise {
   let ctx = self.llvm_ctx
   match ty {
@@ -96,7 +93,7 @@ traitalias @llvm.Value
 ///|
 priv struct Env {
   gen : CodeGen
-  parser_func : @parser.Function
+  parser_func : Function
   llvm_func : @llvm.FunctionValue
   parent : Env?
   symbols : Map[String, &Value]
@@ -105,7 +102,7 @@ priv struct Env {
 ///|
 fn Env::new(
   gen : CodeGen,
-  parser_func : @parser.Function,
+  parser_func : Function,
   llvm_func : @llvm.FunctionValue
 ) -> Env {
   Env::{ gen, parser_func, llvm_func, parent: None, symbols: Map::new() }
@@ -165,7 +162,7 @@ pub fn CodeGen::emitProg(self : Self) -> Unit raise Error {
 ///|
 fn CodeGen::emitStructDef(
   self : Self,
-  struct_def : @parser.StructDef
+  struct_def : StructDef
 ) -> Unit raise {
   // 将结构体字段类型转换为LLVM类型
   let field_types = struct_def.fields.map(field => {
@@ -181,7 +178,7 @@ fn CodeGen::emitStructDef(
 ///|
 fn CodeGen::genFuncVal(
   self : Self,
-  func : @parser.Function
+  func : Function
 ) -> @llvm.FunctionValue raise {
   let param_tys = func.params.map(param_ty => {
     let (_, ty) = param_ty
@@ -212,7 +209,7 @@ fn Env::emitFunc(self : Self) -> Unit raise {
 }
 
 ///|
-fn Env::emitStmt(self : Self, stmt : @parser.Stmt) -> Unit raise {
+fn Env::emitStmt(self : Self, stmt : Stmt) -> Unit raise {
   match stmt {
     Let(name, ty, None) => {
       let data_ty = self.gen.convert_parser_type_to_llvm_basic_type(ty)
@@ -317,7 +314,7 @@ fn Env::emitStmt(self : Self, stmt : @parser.Stmt) -> Unit raise {
 ///|
 fn Env::emitLeftValue(
   self : Self,
-  left_val : @parser.LeftValue
+  left_val : LeftValue
 ) -> &Value raise {
   match left_val {
     Var(name, ..) => {
@@ -393,7 +390,7 @@ fn Env::emitLeftValue(
 }
 
 ///|
-fn Env::emitExpr(self : Self, expr : @parser.Expr) -> &@llvm.Value raise {
+fn Env::emitExpr(self : Self, expr : Expr) -> &@llvm.Value raise {
   match expr {
     Apply(apply_expr, ..) => {
       self.emitApplyExpr(apply_expr)
@@ -627,7 +624,7 @@ fn Env::emitExpr(self : Self, expr : @parser.Expr) -> &@llvm.Value raise {
 ///|
 fn Env::emitApplyExpr(
   self : Self,
-  apply_expr : @parser.ApplyExpr
+  apply_expr : ApplyExpr
 ) -> &@llvm.Value raise {
   match apply_expr {
     Atom(atom_expr, ..) => {
@@ -781,7 +778,7 @@ fn Env::emitApplyExpr(
 ///|
 fn Env::emitAtomExpr(
   self : Self,
-  atomExpr : @parser.AtomExpr
+  atomExpr : AtomExpr
 ) -> &@llvm.Value raise {
   let ctx = self.gen.llvm_ctx
   match atomExpr {
