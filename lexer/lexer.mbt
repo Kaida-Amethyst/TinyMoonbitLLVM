@@ -1,4 +1,7 @@
 ///|
+pub suberror LexerError String derive(Show)
+
+///|
 pub(all) enum Keyword {
   Let
   If
@@ -34,7 +37,7 @@ pub enum Token {
 } derive(Show, Eq)
 
 ///|
-pub fn lex(code : String) -> Array[Token] {
+pub fn lex(code : String) -> Array[Token] raise {
   let tokens = Array::new()
   loop code[:] {
     [] => {
@@ -176,10 +179,8 @@ pub fn lex(code : String) -> Array[Token] {
       tokens.push(tok)
       continue rest
     }
-    other_strs => {
-      println("Parse Error: Unexpected char: \{other_strs}")
-      panic()
-    }
+    other_strs =>
+      raise LexerError("Parse Error: Unexpected char: \{other_strs}")
   }
 }
 
@@ -214,7 +215,7 @@ pub fn lex_lower_ident(rest : @string.View) -> (Token, @string.View) {
 }
 
 ///|
-pub fn lex_number(rest : @string.View) -> (Token, @string.View) {
+pub fn lex_number(rest : @string.View) -> (Token, @string.View) raise {
   let mut has_dot = false
   let num_chars = Array::new()
   loop rest {
@@ -231,10 +232,7 @@ pub fn lex_number(rest : @string.View) -> (Token, @string.View) {
       let num_str = String::from_array(num_chars)
       let num = match (try? @strconv.parse_int64(num_str)) {
         Ok(n) => n
-        Err(_) => {
-          println("Parse Int64 failed: \{num_str}")
-          panic()
-        }
+        Err(_) => raise LexerError("Parse Int64 failed: \{num_str}")
       }
       break (Token::Int64(num), rest_str)
     }
@@ -242,10 +240,7 @@ pub fn lex_number(rest : @string.View) -> (Token, @string.View) {
       let num_str = String::from_array(num_chars)
       let num = match (try? @strconv.parse_uint64(num_str)) {
         Ok(n) => n
-        Err(_) => {
-          println("Parse UInt64 failed: \{num_str}")
-          panic()
-        }
+        Err(_) => raise LexerError("Parse UInt64 failed: \{num_str}")
       }
       break (Token::UInt64(num), rest_str)
     }
@@ -253,10 +248,7 @@ pub fn lex_number(rest : @string.View) -> (Token, @string.View) {
       let num_str = String::from_array(num_chars)
       let num = match (try? @strconv.parse_uint(num_str)) {
         Ok(n) => n
-        Err(_) => {
-          println("Parse UInt failed: \{num_str}")
-          panic()
-        }
+        Err(_) => raise LexerError("Parse UInt failed: \{num_str}")
       }
       break (Token::UInt(num), rest_str)
     }
@@ -275,10 +267,7 @@ pub fn lex_number(rest : @string.View) -> (Token, @string.View) {
       let num_str = String::from_array(num_chars)
       let num = match (try? @strconv.parse_double(num_str)) {
         Ok(n) => n
-        Err(_) => {
-          println("Parse Double failed: \{num_str}")
-          panic()
-        }
+        Err(_) => raise LexerError("Parse Double failed: \{num_str}")
       }
       break (Token::Double(num), rest)
     }
@@ -286,10 +275,7 @@ pub fn lex_number(rest : @string.View) -> (Token, @string.View) {
       let num_str = String::from_array(num_chars)
       let num = match (try? @strconv.parse_int(num_str)) {
         Ok(n) => n
-        Err(_) => {
-          println("Parse Int failed: \{num_str}")
-          panic()
-        }
+        Err(_) => raise LexerError("Parse Int failed: \{num_str}")
       }
       break (Token::Int(num), rest)
     }

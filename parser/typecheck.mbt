@@ -1,4 +1,7 @@
 ///|
+pub suberror TypeCheckError String derive(Show)
+
+///|
 pub struct Env[K, V] {
   parent : Env[K, V]?
   data : Map[K, V]
@@ -25,16 +28,13 @@ pub fn[K : Eq + Hash, V] Env::get(self : Self[K, V], key : K) -> V? {
 pub fn[K : Eq + Hash + Show, V] Env::get_or_err(
   self : Self[K, V],
   key : K
-) -> V {
+) -> V raise {
   match self.data.get(key) {
     Some(value) => value
     None =>
       match self.parent {
         Some(parent_env) => parent_env.get_or_err(key)
-        None => {
-          println("Error: Key not found: \{key}")
-          panic()
-        }
+        None => raise TypeCheckError("Error: Key not found: \{key}")
       }
   }
 }
@@ -44,10 +44,9 @@ pub fn[K : Eq + Hash + Show, V] Env::set(
   self : Self[K, V],
   key : K,
   value : V
-) -> Unit {
+) -> Unit raise {
   if self.data.contains(key) {
-    println("Error: Duplicate key: \{key}")
-    panic()
+    raise TypeCheckError("Error: Duplicate key: \{key}")
   }
   self.data.set(key, value)
 }
@@ -69,7 +68,7 @@ pub fn TypeCheck::sub_env(self : Self) -> TypeCheck {
 }
 
 ///|
-pub fn TypeCheck::check_prog(prog : Program) -> Unit {
+pub fn TypeCheck::check_prog(prog : Program) -> Unit raise {
   for func_entry in prog.functions {
     let (_, func) = func_entry
     TypeCheck::{ local_env: Env::new(), func, prog }.check_function(func)
@@ -77,7 +76,7 @@ pub fn TypeCheck::check_prog(prog : Program) -> Unit {
 }
 
 ///|
-pub fn TypeCheck::check_function(self : Self, func : Function) -> Unit {
+pub fn TypeCheck::check_function(self : Self, func : Function) -> Unit raise {
   for param in func.params {
     let (name, ty) = param
     self.local_env.set(name, ty)
@@ -86,21 +85,23 @@ pub fn TypeCheck::check_function(self : Self, func : Function) -> Unit {
 }
 
 ///|
-pub fn TypeCheck::check_stmt(self : Self, stmt : Stmt) -> Unit {
+pub fn TypeCheck::check_stmt(self : Self, stmt : Stmt) -> Unit raise {
   match stmt {
     Let(var_name, ty, None) => {
       // let arr: Array[Int]; is not allowed
       guard not(ty is Array(_)) else {
-        println("Error: Array type must be initialized with values")
-        panic()
+        raise TypeCheckError(
+          "Error: Array type must be initialized with values",
+        )
       }
       self.local_env.set(var_name, ty)
     }
     Let(var_name, ty, Some(expr)) => {
       let expr_ty = self.check_expr(expr)
       guard expr_ty == ty else {
-        println("Let Statement Type Mismatch: Expected \{ty}, got \{expr_ty}")
-        panic()
+        raise TypeCheckError(
+          "Let Statement Type Mismatch: Expected \{ty}, got \{expr_ty}",
+        )
       }
       self.local_env.set(var_name, ty)
     }
@@ -108,15 +109,17 @@ pub fn TypeCheck::check_stmt(self : Self, stmt : Stmt) -> Unit {
       let left_ty = self.check_left_value(left_value)
       let expr_ty = self.check_expr(expr)
       guard left_ty == expr_ty else {
-        println("Assignment Type Mismatch: Expected \{left_ty}, got \{expr_ty}")
-        panic()
+        raise TypeCheckError(
+          "Assignment Type Mismatch: Expected \{left_ty}, got \{expr_ty}",
+        )
       }
     }
     If(cond, then_block, else_block) => {
       let cond_ty = self.check_expr(cond)
       guard cond_ty is Bool else {
-        println("If Condition Type Mismatch: Expected Bool, got \{cond_ty}")
-        panic()
+        raise TypeCheckError(
+          "If Condition Type Mismatch: Expected Bool, got \{cond_ty}",
+        )
       }
       then_block.each(stmt => self.sub_env().check_stmt(stmt))
       else_block.each(stmt => self.sub_env().check_stmt(stmt))
@@ -124,24 +127,25 @@ pub fn TypeCheck::check_stmt(self : Self, stmt : Stmt) -> Unit {
     While(cond, body) => {
       let cond_ty = self.check_expr(cond)
       guard cond_ty is Bool else {
-        println("While Condition Type Mismatch: Expected Bool, got \{cond_ty}")
-        panic()
+        raise TypeCheckError(
+          "While Condition Type Mismatch: Expected Bool, got \{cond_ty}",
+        )
       }
       body.each(stmt => self.sub_env().check_stmt(stmt))
     }
     Return(Some(expr)) => {
       let expr_ty = self.check_expr(expr)
       guard expr_ty == self.func.ret_ty else {
-        println(
+        raise TypeCheckError(
           "Return Type Mismatch: Expected \{self.func.ret_ty}, got \{expr_ty}",
         )
-        panic()
       }
     }
     Return(None) => {
       guard self.func.ret_ty is Unit else {
-        println("Return Type Mismatch: Expected Void, got \{self.func.ret_ty}")
-        panic()
+        raise TypeCheckError(
+          "Return Type Mismatch: Expected Void, got \{self.func.ret_ty}",
+        )
       }
     }
     Expr(expr) => {
@@ -152,7 +156,7 @@ pub fn TypeCheck::check_stmt(self : Self, stmt : Stmt) -> Unit {
 }
 
 ///|
-pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
+pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type raise {
   match expr {
     Apply(apply_expr, ..) as a => {
       let ty = self.check_apply(apply_expr)
@@ -168,8 +172,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Add Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Add Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       add_expr.ty = Some(lhs_ty)
       lhs_ty
@@ -178,8 +183,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Sub Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Sub Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       sub_expr.ty = Some(lhs_ty)
       lhs_ty
@@ -188,8 +194,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Mul Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Mul Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       mul_expr.ty = Some(lhs_ty)
       lhs_ty
@@ -198,8 +205,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Div Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Div Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       div_expr.ty = Some(lhs_ty)
       lhs_ty
@@ -208,8 +216,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Rem Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Rem Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       rem_expr.ty = Some(lhs_ty)
       lhs_ty
@@ -218,8 +227,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Eq Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Eq Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -227,8 +237,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Neq Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Neq Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -236,8 +247,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Lt Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Lt Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -245,8 +257,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Le Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Le Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -254,8 +267,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Gt Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Gt Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -263,8 +277,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Ge Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Ge Type Mismatch: Expected \{lhs_ty}, got \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -272,8 +287,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == Bool && rhs_ty == Bool else {
-        println("And Type Mismatch: Expected Bool, got \{lhs_ty} and \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "And Type Mismatch: Expected Bool, got \{lhs_ty} and \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -281,8 +297,9 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == Bool && rhs_ty == Bool else {
-        println("Or Type Mismatch: Expected Bool, got \{lhs_ty} and \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Or Type Mismatch: Expected Bool, got \{lhs_ty} and \{rhs_ty}",
+        )
       }
       Bool
     }
@@ -290,12 +307,14 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Shl Type Mismatch: Expected Int, got \{lhs_ty} and \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Shl Type Mismatch: Expected Int, got \{lhs_ty} and \{rhs_ty}",
+        )
       }
       guard lhs_ty is (Int | UInt | Int64 | UInt64) else {
-        println("Shl Type Mismatch: Expected Int or UInt, got \{lhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Shl Type Mismatch: Expected Int or UInt, got \{lhs_ty}",
+        )
       }
       shl_expr.ty = Some(lhs_ty)
       Int
@@ -304,12 +323,14 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
       let lhs_ty = self.check_expr(lhs)
       let rhs_ty = self.check_expr(rhs)
       guard lhs_ty == rhs_ty else {
-        println("Shr Type Mismatch: Expected Int, got \{lhs_ty} and \{rhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Shr Type Mismatch: Expected Int, got \{lhs_ty} and \{rhs_ty}",
+        )
       }
       guard lhs_ty is (Int | UInt | Int64 | UInt64) else {
-        println("Shr Type Mismatch: Expected Int or UInt, got \{lhs_ty}")
-        panic()
+        raise TypeCheckError(
+          "Shr Type Mismatch: Expected Int or UInt, got \{lhs_ty}",
+        )
       }
       shr_expr.ty = Some(lhs_ty)
       Int
@@ -318,7 +339,10 @@ pub fn TypeCheck::check_expr(self : Self, expr : Expr) -> Type {
 }
 
 ///|
-pub fn TypeCheck::check_left_value(self : Self, left_value : LeftValue) -> Type {
+pub fn TypeCheck::check_left_value(
+  self : Self,
+  left_value : LeftValue
+) -> Type raise {
   match left_value {
     Var(name, ..) as var_left => {
       let ty = self.local_env.get_or_err(name)
@@ -329,38 +353,46 @@ pub fn TypeCheck::check_left_value(self : Self, left_value : LeftValue) -> Type 
       let left_ty = self.check_left_value(left)
       let index_ty = self.check_expr(index)
       guard index_ty is Int else {
-        println("ArrayGet Index Type Mismatch: Expected Int, got \{index_ty}")
-        panic()
-      }
-      guard left_ty is Array(arr_ty) else {
-        println(
-          "ArrayGet Left Value Type Mismatch: Expected ArrayType, got \{left_ty}",
+        raise TypeCheckError(
+          "ArrayGet Index Type Mismatch: Expected Int, got \{index_ty}",
         )
-        panic()
       }
-      array_get.ty = Some(arr_ty)
-      arr_ty
+      match left_ty {
+        Array(ele_ty) => {
+          array_get.ty = Some(ele_ty)
+          ele_ty
+        }
+        Ptr(ele_ty) => {
+          array_get.ty = Some(ele_ty)
+          ele_ty
+        }
+        _ =>
+          raise TypeCheckError(
+            "ArrayGet Left Value Type Mismatch: Expected ArrayType or Pointer, got \{left_ty}",
+          )
+      }
     }
     StructAccess(left, field_name, ..) as struct_access => {
       let left_ty = self.check_left_value(left)
       guard left_ty is Struct(struct_ty) else {
-        println(
+        raise TypeCheckError(
           "StructAccess Left Value Type Mismatch: Expected StructType, got \{left_ty}",
         )
-        panic()
       }
-      let struct_def = self.prog.structs
-        .get(struct_ty)
-        .or_else(() => {
-          println("Error: Struct \{struct_ty} not found in program")
-          panic()
-        })
-      let ty = struct_def
-        .get_field_type(field_name)
-        .or_else(() => {
-          println("Error: Field \{field_name} not found in struct \{struct_ty}")
-          panic()
-        })
+      let struct_def = match self.prog.structs.get(struct_ty) {
+        Some(def) => def
+        None =>
+          raise TypeCheckError(
+            "Error: Struct \{struct_ty} not found in program",
+          )
+      }
+      let ty = match struct_def.get_field_type(field_name) {
+        Some(ty) => ty
+        None =>
+          raise TypeCheckError(
+            "Error: Field \{field_name} not found in struct \{struct_ty}",
+          )
+      }
       struct_access.ty = Some(ty)
       ty
     }
@@ -368,7 +400,10 @@ pub fn TypeCheck::check_left_value(self : Self, left_value : LeftValue) -> Type 
 }
 
 ///|
-pub fn TypeCheck::check_apply(self : Self, apply_expr : ApplyExpr) -> Type {
+pub fn TypeCheck::check_apply(
+  self : Self,
+  apply_expr : ApplyExpr
+) -> Type raise {
   match apply_expr {
     Atom(atom_expr, ..) as a => {
       let ty = self.check_atom_expr(atom_expr)
@@ -379,38 +414,46 @@ pub fn TypeCheck::check_apply(self : Self, apply_expr : ApplyExpr) -> Type {
       let left_ty = self.check_apply(left)
       let index_ty = self.check_expr(index)
       guard index_ty is Int else {
-        println("ArrayGet Index Type Mismatch: Expected Int, got \{index_ty}")
-        panic()
-      }
-      guard left_ty is Array(arr_ty) else {
-        println(
-          "ArrayGet Left Value Type Mismatch: Expected ArrayType, got \{left_ty}",
+        raise TypeCheckError(
+          "ArrayGet Index Type Mismatch: Expected Int, got \{index_ty}",
         )
-        panic()
       }
-      array_get.ty = Some(arr_ty)
-      arr_ty
+      match left_ty {
+        Array(ele_ty) => {
+          array_get.ty = Some(ele_ty)
+          ele_ty
+        }
+        Ptr(ele_ty) => {
+          array_get.ty = Some(ele_ty)
+          ele_ty
+        }
+        _ =>
+          raise TypeCheckError(
+            "ArrayGet Left Value Type Mismatch: Expected ArrayType or Pointer, got \{left_ty}",
+          )
+      }
     }
     StructAccess(left, field_name, ..) as struct_access => {
       let left_ty = self.check_apply(left)
       guard left_ty is Struct(struct_ty) else {
-        println(
+        raise TypeCheckError(
           "StructAccess Left Value Type Mismatch: Expected StructType, got \{left_ty}",
         )
-        panic()
       }
-      let struct_def = self.prog.structs
-        .get(struct_ty)
-        .or_else(() => {
-          println("Error: Struct \{struct_ty} not found in program")
-          panic()
-        })
-      let ty = struct_def
-        .get_field_type(field_name)
-        .or_else(() => {
-          println("Error: Field \{field_name} not found in struct \{struct_ty}")
-          panic()
-        })
+      let struct_def = match self.prog.structs.get(struct_ty) {
+        Some(def) => def
+        None =>
+          raise TypeCheckError(
+            "Error: Struct \{struct_ty} not found in program",
+          )
+      }
+      let ty = match struct_def.get_field_type(field_name) {
+        Some(ty) => ty
+        None =>
+          raise TypeCheckError(
+            "Error: Field \{field_name} not found in struct \{struct_ty}",
+          )
+      }
       struct_access.ty = Some(ty)
       ty
     }
@@ -422,7 +465,10 @@ pub fn TypeCheck::check_apply(self : Self, apply_expr : ApplyExpr) -> Type {
 }
 
 ///|
-pub fn TypeCheck::check_atom_expr(self : Self, atom_expr : AtomExpr) -> Type {
+pub fn TypeCheck::check_atom_expr(
+  self : Self,
+  atom_expr : AtomExpr
+) -> Type raise {
   match atom_expr {
     Bool(_) => Bool
     Int(_) => Int
@@ -445,15 +491,14 @@ pub fn TypeCheck::check_atom_expr(self : Self, atom_expr : AtomExpr) -> Type {
     ExprSizeof(_) => Int
     Array(exprs, ..) as array_expr => {
       let exprs_tys = exprs.map(self.check_expr(_))
-      let last = exprs_tys
-        .last()
-        .or_else(() => {
-          println("Error: Empty array in AtomExpr")
-          panic()
-        })
+      let last = match exprs_tys.last() {
+        Some(ty) => ty
+        None => raise TypeCheckError("Error: Empty array in AtomExpr")
+      }
       guard exprs_tys.iter().all(ty => ty == last) else {
-        println("Error: Array element types do not match: \{exprs_tys}")
-        panic()
+        raise TypeCheckError(
+          "Error: Array element types do not match: \{exprs_tys}",
+        )
       }
       let ty = Type::Array(last)
       array_expr.ty = Some(ty)
@@ -465,31 +510,23 @@ pub fn TypeCheck::check_atom_expr(self : Self, atom_expr : AtomExpr) -> Type {
       expr_ty
     }
     Call(func_name, args, ..) as call_expr => {
-      //let func = self.prog.functions
-      //  .get(func_name)
-      //  .or_else(() => {
-      //      println("Error: Function \{func_name} not found in program")
-      //      panic()
-      //    }
-      //  )
       let func = match self.prog.functions.get(func_name) {
         Some(f) => f
         None =>
           match self.prog.externs.get(func_name) {
             Some(f) => f
-            None => {
-              println("Error: Function \{func_name} not found in program")
-              panic()
-            }
+            None =>
+              raise TypeCheckError(
+                "Error: Function \{func_name} not found in program",
+              )
           }
       }
       let args_tys = args.map(self.check_expr(_))
       let param_tys = func.params.map(param => param.1)
       guard args_tys == param_tys else {
-        println(
+        raise TypeCheckError(
           "Error: Function \{func_name} argument types do not match. Expected \{param_tys}, got \{args_tys}",
         )
-        panic()
       }
       call_expr.ty = Some(func.ret_ty)
       func.ret_ty
